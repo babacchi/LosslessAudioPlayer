@@ -76,6 +76,30 @@ class Album:
 
 
 @dataclass
+class Artist:
+    name: str
+    album_count: int = 0
+    track_count: int = 0
+    total_duration: float = 0.0
+    is_hires: bool = False
+    sample_rate: int = 44100
+    bit_depth: int = 16
+    cover_path: Optional[str] = None
+    albums: List[Album] = field(default_factory=list)
+    tracks: List[Track] = field(default_factory=list)
+
+    @property
+    def duration_formatted(self) -> str:
+        mins = int(self.total_duration // 60)
+        if mins >= 60:
+            hrs = mins // 60
+            remaining_mins = mins % 60
+            return f"{hrs}時間 {remaining_mins:02d}分"
+        secs = int(self.total_duration % 60)
+        return f"{mins:02d}:{secs:02d}"
+
+
+@dataclass
 class AudioDevice:
     index: int
     name: str

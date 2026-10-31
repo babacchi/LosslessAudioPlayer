@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QIcon, QFont
 
-from app.core.models import Track, Album, AudioDevice
+from app.core.models import Track, Album, Artist, AudioDevice
 from app.core.database import Database
 from app.core.audio_engine import AudioEngine
 from app.core.scanner import LibraryScannerTask
 from app.ui.album_grid import AlbumGridView
 from app.ui.album_detail import AlbumDetailView
+from app.ui.artist_grid import ArtistGridView
+from app.ui.artist_detail import ArtistDetailView
 from app.ui.track_table import TrackTableView
 from app.ui.player_bar import PlayerBar
 from app.ui.dac_dialog import DacSettingsDialog
@@ -71,11 +73,15 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.album_grid_view = AlbumGridView()
         self.album_detail_view = AlbumDetailView()
+        self.artist_grid_view = ArtistGridView()
+        self.artist_detail_view = ArtistDetailView()
         self.track_table_view = TrackTableView()
 
-        self.stack.addWidget(self.album_grid_view)      # Index 0
-        self.stack.addWidget(self.album_detail_view)    # Index 1
-        self.stack.addWidget(self.track_table_view)     # Index 2
+        self.stack.addWidget(self.album_grid_view)       # Index 0
+        self.stack.addWidget(self.album_detail_view)     # Index 1
+        self.stack.addWidget(self.artist_grid_view)      # Index 2
+        self.stack.addWidget(self.artist_detail_view)    # Index 3
+        self.stack.addWidget(self.track_table_view)      # Index 4
 
         content_layout.addWidget(self.stack, stretch=1)
         root_layout.addLayout(content_layout, stretch=1)
@@ -150,10 +156,17 @@ class MainWindow(QMainWindow):
         self.nav_group.addButton(self.btn_nav_albums)
         layout.addWidget(self.btn_nav_albums)
 
+        self.btn_nav_artists = QPushButton("🎤 アーティスト一覧")
+        self.btn_nav_artists.setObjectName("NavButton")
+        self.btn_nav_artists.setCheckable(True)
+        self.btn_nav_artists.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        self.nav_group.addButton(self.btn_nav_artists)
+        layout.addWidget(self.btn_nav_artists)
+
         self.btn_nav_tracks = QPushButton("🎵 曲一覧")
         self.btn_nav_tracks.setObjectName("NavButton")
         self.btn_nav_tracks.setCheckable(True)
-        self.btn_nav_tracks.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        self.btn_nav_tracks.clicked.connect(lambda: self.stack.setCurrentIndex(4))
         self.nav_group.addButton(self.btn_nav_tracks)
         layout.addWidget(self.btn_nav_tracks)
 
@@ -230,8 +243,20 @@ class MainWindow(QMainWindow):
         self.album_grid_view.jacket_size_changed.connect(lambda s: self.db.set_setting("album_jacket_size", str(s)))
 
         # Album Detail View Signals
-        self.album_detail_view.back_requested.connect(lambda: self.stack.setCurrentIndex(0))
+        self.album_detail_view.back_requested.connect(self._on_album_detail_back)
         self.album_detail_view.play_track_requested.connect(self._on_play_track_with_queue)
+
+        # Artist Grid View Signals
+        self.artist_grid_view.artist_selected.connect(self._on_artist_selected)
+        self.artist_grid_view.play_artist_requested.connect(self._on_play_artist)
+        self.artist_grid_view.avatar_size_changed.connect(lambda s: self.db.set_setting("artist_avatar_size", str(s)))
+
+        # Artist Detail View Signals
+        self.artist_detail_view.back_requested.connect(self._on_artist_detail_back)
+        self.artist_detail_view.album_selected.connect(self._on_album_selected)
+        self.artist_detail_view.play_album_requested.connect(self._on_play_album)
+        self.artist_detail_view.play_track_requested.connect(self._on_play_track_with_queue)
+        self.artist_detail_view.play_artist_requested.connect(self._on_play_artist)
 
         # Track Table View Signals
         self.track_table_view.track_selected.connect(self._on_play_track_with_queue)
@@ -262,19 +287,41 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # Restore Artist Avatar Size
+        saved_avatar_size = self.db.get_setting("artist_avatar_size")
+        if saved_avatar_size is not None:
+            try:
+                self.artist_grid_view.set_avatar_size(int(saved_avatar_size))
+            except Exception:
+                pass
+
     def refresh_library(self):
-        """Fetch albums and tracks from database and update views."""
+        """Fetch albums, artists, and tracks from database and update views."""
         albums = self.db.get_albums(self.current_search, sort_by="title")
         if self.filter_hires_only:
             albums = [a for a in albums if a.is_hires]
         self.album_grid_view.set_albums(albums)
 
+        artists = self.db.get_artists(self.current_search, hires_only=self.filter_hires_only)
+        self.artist_grid_view.set_artists(artists)
+
         tracks = self.db.get_all_tracks(self.current_search)
         if self.filter_hires_only:
             tracks = [t for t in tracks if t.is_hires]
         self.track_table_view.set_tracks(tracks)
+
         if self.audio_engine.is_playing and self.audio_engine.current_track:
-            self.track_table_view.set_current_playing_track(self.audio_engine.current_track)
+            cur = self.audio_engine.current_track
+            self.track_table_view.set_current_playing_track(cur)
+            self.album_detail_view.set_current_playing_track(cur)
+            self.artist_detail_view.set_current_playing_track(cur)
+
+        # Refresh open artist detail if viewing
+        if self.stack.currentIndex() == 3 and self.artist_detail_view.artist:
+            cur_name = self.artist_detail_view.artist.name
+            art = self.db.get_artist(cur_name)
+            if art:
+                self.artist_detail_view.set_artist(art, art.albums, art.tracks)
 
     def _on_search_changed(self, text: str):
         self.current_search = text
@@ -285,11 +332,39 @@ class MainWindow(QMainWindow):
         self.refresh_library()
 
     def _on_album_selected(self, album: Album):
+        cur = self.stack.currentIndex()
+        if cur in (0, 3):
+            self._album_prev_index = cur
         tracks = self.db.get_tracks_for_album(album.id)
         self.album_detail_view.set_album(album, tracks)
         if self.audio_engine.is_playing and self.audio_engine.current_track:
             self.album_detail_view.set_current_playing_track(self.audio_engine.current_track)
         self.stack.setCurrentIndex(1)
+
+    def _on_album_detail_back(self):
+        target = getattr(self, "_album_prev_index", 0)
+        self.stack.setCurrentIndex(target)
+        if target == 0:
+            self.btn_nav_albums.setChecked(True)
+        elif target == 3:
+            self.btn_nav_artists.setChecked(True)
+
+    def _on_artist_selected(self, artist: Artist):
+        albums = self.db.get_albums_for_artist(artist.name)
+        tracks = self.db.get_tracks_for_artist(artist.name)
+        self.artist_detail_view.set_artist(artist, albums, tracks)
+        if self.audio_engine.is_playing and self.audio_engine.current_track:
+            self.artist_detail_view.set_current_playing_track(self.audio_engine.current_track)
+        self.stack.setCurrentIndex(3)
+
+    def _on_artist_detail_back(self):
+        self.stack.setCurrentIndex(2)
+        self.btn_nav_artists.setChecked(True)
+
+    def _on_play_artist(self, artist: Artist):
+        tracks = self.db.get_tracks_for_artist(artist.name)
+        if tracks:
+            self._on_play_track_with_queue(tracks[0], tracks)
 
     def _on_play_album(self, album: Album):
         tracks = self.db.get_tracks_for_album(album.id)
@@ -396,6 +471,7 @@ class MainWindow(QMainWindow):
         self.player_bar.set_track(track)
         self.track_table_view.set_current_playing_track(track)
         self.album_detail_view.set_current_playing_track(track)
+        self.artist_detail_view.set_current_playing_track(track)
 
         # Pre-buffer the next upcoming track for gapless playback
         self._prepare_next_track()
@@ -405,6 +481,7 @@ class MainWindow(QMainWindow):
         if not is_playing:
             self.track_table_view.set_current_playing_track(None)
             self.album_detail_view.set_current_playing_track(None)
+            self.artist_detail_view.set_current_playing_track(None)
 
     def _on_track_ended(self):
         # 1-track repeat mode (🔂)

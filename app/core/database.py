@@ -3,7 +3,7 @@ import sqlite3
 import os
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
-from app.core.models import Track, Album
+from app.core.models import Track, Album, Artist
 
 
 def get_default_db_path() -> Path:
@@ -396,6 +396,144 @@ class Database:
                 WHERE tracks.album_id = ?
                 ORDER BY tracks.disc_number ASC, tracks.track_number ASC, tracks.title ASC
             """, (album_id,))
+            return [self._row_to_track(r) for r in cursor.fetchall()]
+
+    def get_artists(self, search: str = "", hires_only: bool = False) -> List[Artist]:
+        """Fetch all distinct artists with aggregated stats and representative cover art."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            where_clauses = ["tracks.artist IS NOT NULL", "tracks.artist != ''"]
+            params = []
+
+            if search.strip():
+                where_clauses.append("tracks.artist LIKE ?")
+                params.append(f"%{search.strip()}%")
+
+            where_sql = " AND ".join(where_clauses)
+            query = f"""
+                SELECT 
+                    tracks.artist AS name,
+                    COUNT(DISTINCT tracks.album_id) AS album_count,
+                    COUNT(tracks.id) AS track_count,
+                    SUM(tracks.duration) AS total_duration,
+                    MAX(tracks.sample_rate) AS max_sr,
+                    MAX(tracks.bit_depth) AS max_bd,
+                    (
+                        SELECT albums.cover_path FROM tracks AS t2
+                        LEFT JOIN albums ON t2.album_id = albums.id
+                        WHERE t2.artist = tracks.artist AND albums.cover_path IS NOT NULL AND albums.cover_path != ''
+                        ORDER BY albums.is_hires DESC, albums.year DESC
+                        LIMIT 1
+                    ) AS cover_path
+                FROM tracks
+                WHERE {where_sql}
+                GROUP BY tracks.artist
+                ORDER BY tracks.artist COLLATE NOCASE ASC
+            """
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            artists = []
+            for r in rows:
+                max_sr = r["max_sr"] or 44100
+                max_bd = r["max_bd"] or 16
+                is_hires = max_sr >= 88200 or max_bd >= 24
+                if hires_only and not is_hires:
+                    continue
+
+                artists.append(Artist(
+                    name=r["name"],
+                    album_count=r["album_count"] or 0,
+                    track_count=r["track_count"] or 0,
+                    total_duration=r["total_duration"] or 0.0,
+                    is_hires=is_hires,
+                    sample_rate=max_sr,
+                    bit_depth=max_bd,
+                    cover_path=r["cover_path"]
+                ))
+            return artists
+
+    def get_artist(self, name: str) -> Optional[Artist]:
+        """Fetch a single artist by exact name, including their albums and tracks."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    tracks.artist AS name,
+                    COUNT(DISTINCT tracks.album_id) AS album_count,
+                    COUNT(tracks.id) AS track_count,
+                    SUM(tracks.duration) AS total_duration,
+                    MAX(tracks.sample_rate) AS max_sr,
+                    MAX(tracks.bit_depth) AS max_bd,
+                    (
+                        SELECT albums.cover_path FROM tracks AS t2
+                        LEFT JOIN albums ON t2.album_id = albums.id
+                        WHERE t2.artist = tracks.artist AND albums.cover_path IS NOT NULL AND albums.cover_path != ''
+                        ORDER BY albums.is_hires DESC, albums.year DESC
+                        LIMIT 1
+                    ) AS cover_path
+                FROM tracks
+                WHERE tracks.artist = ?
+                GROUP BY tracks.artist
+            """, (name,))
+            r = cursor.fetchone()
+            if not r:
+                return None
+
+            max_sr = r["max_sr"] or 44100
+            max_bd = r["max_bd"] or 16
+            artist = Artist(
+                name=r["name"],
+                album_count=r["album_count"] or 0,
+                track_count=r["track_count"] or 0,
+                total_duration=r["total_duration"] or 0.0,
+                is_hires=(max_sr >= 88200 or max_bd >= 24),
+                sample_rate=max_sr,
+                bit_depth=max_bd,
+                cover_path=r["cover_path"],
+                albums=self.get_albums_for_artist(name),
+                tracks=self.get_tracks_for_artist(name)
+            )
+            return artist
+
+    def get_albums_for_artist(self, artist_name: str) -> List[Album]:
+        """Fetch all albums where this artist is either the album artist or has tracks."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM albums 
+                WHERE albums.artist = ? 
+                   OR albums.id IN (SELECT DISTINCT album_id FROM tracks WHERE tracks.artist = ?)
+                ORDER BY albums.year DESC, albums.title COLLATE NOCASE ASC
+            """, (artist_name, artist_name))
+            return [
+                Album(
+                    id=r["id"],
+                    title=r["title"],
+                    artist=r["artist"],
+                    year=r["year"],
+                    genre=r["genre"] or "",
+                    cover_path=r["cover_path"],
+                    track_count=r["track_count"],
+                    total_duration=r["total_duration"],
+                    is_hires=bool(r["is_hires"]),
+                    sample_rate=r["sample_rate"],
+                    bit_depth=r["bit_depth"],
+                    format=r["format"] or "FLAC"
+                )
+                for r in cursor.fetchall()
+            ]
+
+    def get_tracks_for_artist(self, artist_name: str) -> List[Track]:
+        """Fetch all tracks performed or composed by this artist."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT tracks.*, albums.cover_path FROM tracks
+                LEFT JOIN albums ON tracks.album_id = albums.id
+                WHERE tracks.artist = ?
+                ORDER BY tracks.album COLLATE NOCASE ASC, tracks.disc_number ASC, tracks.track_number ASC, tracks.title ASC
+            """, (artist_name,))
             return [self._row_to_track(r) for r in cursor.fetchall()]
 
     def get_all_tracks(self, search: str = "") -> List[Track]:

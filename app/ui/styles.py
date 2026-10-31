@@ -126,7 +126,7 @@ QPushButton#ActionBtn:hover {
 }
 
 /* Album Detail Header Frame */
-QFrame#AlbumHeaderFrame {
+QFrame#AlbumHeaderFrame, QFrame#ArtistHeaderFrame {
     background-color: #12151e;
     border: 1px solid #1f2537;
     border-radius: 12px;
@@ -204,6 +204,28 @@ QFrame#AlbumCard {
 QFrame#AlbumCard:hover {
     background-color: #1b202e;
     border: 1px solid #37415a;
+}
+
+/* Artist Card */
+QFrame#ArtistCard {
+    background-color: #141721;
+    border: 1px solid #1f2433;
+    border-radius: 12px;
+    padding: 10px;
+}
+QFrame#ArtistCard:hover {
+    background-color: #1b202e;
+    border: 1px solid #e5a93b;
+}
+
+QLabel#ArtistCardName {
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+}
+QLabel#ArtistCardMeta {
+    color: #9ca3af;
+    font-size: 11px;
 }
 
 QLabel#AlbumTitle {
