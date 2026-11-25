@@ -1,0 +1,63 @@
+name: Release Build (macOS & Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create venv and install dependencies
+        shell: cmd
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\pip install -r requirements.txt pyinstaller
+
+      - name: Build Windows release
+        shell: cmd
+        run: build_release.bat
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aura-Lossless-Audio-Player-Windows-x64
+          path: dist/Aura-Lossless-Audio-Player-Windows-x64.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create venv and install dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python3 -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt pyinstaller
+
+      - name: Build macOS release
+        run: |
+          chmod +x build_release.sh
+          ./build_release.sh
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aura-Lossless-Audio-Player-macOS-arm64
+          path: dist/*.dmg
+
