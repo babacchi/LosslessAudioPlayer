@@ -613,3 +613,8 @@ class MainWindow(QMainWindow):
 
     def _on_audio_error(self, message: str):
         QMessageBox.warning(self, "オーディオエラー", message)
+
+    def closeEvent(self, event):
+        self.audio_engine.stop()
+        self.thread_pool.waitForDone(2000)
+        event.accept()

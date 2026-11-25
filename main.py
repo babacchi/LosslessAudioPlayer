@@ -40,7 +40,27 @@ def main():
         audio_engine.stop()
 
     app.aboutToQuit.connect(on_exit)
-    sys.exit(app.exec())
+    ret = app.exec()
+
+    # Destroy widgets cleanly while QApplication is still alive to avoid
+    # PySide6 atexit destructionVisitor crashes in QObject::~QObject.
+    import gc
+    from PySide6.QtCore import QEvent
+    try:
+        import shiboken6
+        if shiboken6.isValid(window):
+            shiboken6.delete(window)
+    except Exception:
+        window.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+
+    del window
+    gc.collect()
+    app.processEvents()
+    del app
+    gc.collect()
+    sys.exit(ret)
 
 
 if __name__ == "__main__":
